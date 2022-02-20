@@ -1,0 +1,198 @@
+---
+title: "twitter_api"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Twitter API (Sample Datasets)
+```{r}
+library(rtweet)
+library(ggplot2)
+library(dplyr)
+library(tidytext)
+
+# getting api approved 
+api_key <- '37osUadblZABTOkc2mqlhERZu'
+
+api_secret_key <- 'k2HdTUg5GERupy8iUyOdrd8Z2J67S4qUeNaZhbgvCSd0p3JmY6'
+
+access_token <- '1453471187653201923-i7wAcAEJSI1youyTHsObUPNuDZENXH'
+
+access_secret_token <- 'Da6L4g5a4IlqEQRpMlLla2ZgvgZLDXd19SaCLULWzauCR'
+
+appname <- "comp_stats_proj"
+key <- '37osUadblZABTOkc2mqlhERZu'
+secret <- 'k2HdTUg5GERupy8iUyOdrd8Z2J67S4qUeNaZhbgvCSd0p3JmY6'
+
+twitter_token <- create_token(
+  app = appname,
+  consumer_key = key,
+  consumer_secret = secret,
+  access_token = access_token,
+  access_secret = access_secret_token
+)
+
+## examples
+rstats_tweets <-search_tweets(q = '#doge', n = 10)
+head(rstats_tweets, n = 5)
+
+timcook <- get_timelines("tim_cook", n = 1255) #total 1255 tweets
+elonmusk <- get_timelines("elonmusk", n = 4000 )# total 17000 tweets
+adamarom <- get_timelines("CEOAdam", n = 4660)
+billgates <- get_timeline("BillGates", n=3719)
+tesla <- search_tweets(q = '#tesla', n=1700)
+iphone13 <- search_tweets(q = '#iphone13', n=1500)
+```
+
+
+## Word Cloud
+```{r}
+library("tm") # for text mining
+library("SnowballC") # for text stemming
+library("wordcloud") # word-cloud generator
+library("RColorBrewer") # color palettes
+library(wordcloud2)
+
+# docs for gamestop text
+gamestop_t <- gamestop%>%
+  select(text)
+
+# remove alphanumeric characters 
+gamestop_t$text <- gsub("[^[:alnum:][:blank:]?&/\\-]", "",gamestop_t$text)
+
+# remove hyperlinks
+gamestop_t$text <- gsub("https\\S*", "",gamestop_t$text) 
+
+ # amp just keeps showing up, remove it!!
+gamestop_t$text <- gsub("amp", "",gamestop_t$text)
+
+#create a corpus to allow us clean the text column with tm
+docs1 <- Corpus(VectorSource(gamestop_t$text))
+
+
+docs1 <- docs1 %>%
+  tm_map(removeNumbers) %>% # removes numbers from text
+  tm_map(removePunctuation) %>% # removes punctuation from text
+  tm_map(stripWhitespace) %>% # trims the text of whitespace
+  tm_map(content_transformer(tolower)) %>% # convert text to lowercase
+  tm_map(removeWords,stopwords("english")) %>% # remove stopwords
+  tm_map(removeWords,stopwords("SMART")) # remove stopwords not removed from previous line
+
+# document matrix
+dtm <- TermDocumentMatrix(docs1)%>%
+as.matrix(dtm)
+
+# count all occurences of each word and group them
+v <- sort(rowSums(dtm),decreasing=TRUE)
+
+#convert it into a data frame
+d <- data.frame(word = names(v),freq=v)
+head(d, 10)
+
+#word cloud
+set.seed(1234)
+#wordcloud <- wordcloud(words = d$word, freq = d$freq, min.freq = 1,max.words=25, random.order=FALSE, rot.per=0.35, colors=brewer.pal(8, "Dark2"))
+
+wcloud <- wordcloud2(d, #generate word cloud
+                     size = 1.5,
+                     color = "random-dark",
+                     shape = 'pentagon',
+                     rotateRatio = 0)
+wcloud
+```
+
+
+```{r}
+library("tm") # for text mining
+library("SnowballC") # for text stemming
+library("wordcloud") # word-cloud generator
+library("RColorBrewer") # color palettes
+library(wordcloud2)
+
+#creating a function that takes tweet data set and generates a wordcloud
+
+exportWordCloud <- function(tweet_category){
+  tweets <- tweet_category # make a copy
+  tweets <- tweets %>% dplyr::select("text") # selects just the text column
+  tweets$text <- gsub("[^[:alnum:][:blank:]?&/\\-]", "",tweets$text) # remove alphanumeric characters 
+  tweets$text <- gsub("https\\S*", "",tweets$text) # remove hyperlinks
+  tweets$text <- gsub("amp", "",tweets$text) # amp just keeps showing up, remove it!!
+  #create a corpus to allow us clean the text column with tm
+  tweets.corpus <- Corpus(VectorSource(tweets$text))
+  tweets.corpus <- tweets.corpus %>%
+    tm_map(removeNumbers) %>% # removes numbers from text
+    tm_map(removePunctuation) %>% # removes punctuation from text
+    tm_map(stripWhitespace) %>% # trims the text of whitespace
+    tm_map(content_transformer(tolower)) %>% # convert text to lowercase
+    tm_map(removeWords,stopwords("english")) %>% # remove stopwords
+    tm_map(removeWords,stopwords("SMART")) # remove stopwords not removed from previous line
+    tdm <- TermDocumentMatrix(tweets.corpus) %>% # create a term document matrix
+    as.matrix()
+  words <- sort(rowSums(tdm), decreasing = TRUE) # count all occurences of each word and group them
+  df <- data.frame(word = names(words), freq = words) # convert it to a dataframe
+  set.seed(1234) # for reproducibility, sorta
+  wcloud <- wordcloud2(df,   # generate word cloud
+                     size = 1,
+                     color= 'random-dark', # set colors
+                     rotateRatio = 0) #horizontal looks better, but what do you think?
+  wcloud
+}
+
+exportWordCloud(timcook)
+exportWordCloud(elonmusk)
+exportWordCloud(adamarom)
+exportWordCloud(tesla)
+exportWordCloud(iphone13)
+exportWordCloud(df)
+```
+
+## How to lubridate
+```{r}
+library(ggplot2)
+library(lubridate)
+library(scales)
+library(tm)
+library(stringr)
+library(wordcloud)
+library(syuzhet) #breaking down paragraphs into sentences package
+library(reshape2)
+library(dplyr)
+library(rCharts) 
+```
+
+```{r}
+#extrct year, month, day, hour, minute and second from timestamps. But notice a new column is created, called created_date. 
+
+timcook$created_at <- ymd_hms(timcook$created_at)
+timcook$created_at <- with_tz(timcook$created_at, "America/New_York")
+timcook$created_at <- as.Date(timcook$created_at)
+
+head(timcook)
+
+# timcook <- timcook[timcook$created_at>="2012-01-01",] #using certain time after 2012-01-01
+
+timcook$created_date_label <- as.factor(timcook$created_at)
+print(c("the average number of favorites:", mean(timcook$favorite_count))) 
+print(c("the average number of retweet:",mean(timcook$retweet_count)))
+
+timcook_posts_popularity <- timcook %>% 
+  group_by(created_date_label) %>% 
+  summarise(avg_favorites = mean(favorite_count),
+            avg_retweet = mean(retweet_count),
+            post_count = length(unique(status_id))) %>% melt
+
+names(timcook_posts_popularity) <- c("day", "type", "value")
+timcook_posts_popularity$day <- as.Date(timcook_posts_popularity$day)
+
+
+ggplot(data = timcook_posts_popularity, aes(x = day, y = value, group = type)) +
+  geom_line(size = 0.9, alpha = 0.7, aes(color = type)) +
+  geom_point(size = 0) +
+  ylim(0, NA) +
+  theme(legend.title=element_blank(), axis.title.x = element_blank()) +
+  ylab("Engagement indicators") + 
+  ggtitle("Popularity over time")
+

@@ -1,0 +1,145 @@
+---
+title: "twitter_api"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+## Twitter API (Sample Datasets)
+```{r}
+library(rtweet)
+library(ggplot2)
+library(dplyr)
+library(tidytext)
+
+api_key <- '37osUadblZABTOkc2mqlhERZu'
+
+api_secret_key <- 'k2HdTUg5GERupy8iUyOdrd8Z2J67S4qUeNaZhbgvCSd0p3JmY6'
+
+access_token <- '1453471187653201923-i7wAcAEJSI1youyTHsObUPNuDZENXH'
+
+access_secret_token <- 'Da6L4g5a4IlqEQRpMlLla2ZgvgZLDXd19SaCLULWzauCR'
+
+appname <- "comp_stats_proj"
+key <- '37osUadblZABTOkc2mqlhERZu'
+secret <- 'k2HdTUg5GERupy8iUyOdrd8Z2J67S4qUeNaZhbgvCSd0p3JmY6'
+
+
+twitter_token <- create_token(
+  app = appname,
+  consumer_key = key,
+  consumer_secret = secret,
+  access_token = access_token,
+  access_secret = access_secret_token
+)
+
+rstats_tweets <-search_tweets(q = '#dodge', n = 10)
+
+head(rstats_tweets, n = 5)
+
+trump <- get_timelines("BillGates", n = 10)
+trump
+
+gamestop <- search_tweets("#gamestop", n = 10)
+gamestop
+
+text <- gamestop %>% select(text)
+
+text
+```
+
+
+
+## Stock Ticker API Samples
+```{r}
+library(alphavantager)
+av_api_key("YOUR_API_KEY")
+print(av_api_key())
+
+TSLA <- av_get(symbol     = "TSLA",
+       av_fun     = "TIME_SERIES_INTRADAY",
+       interval   = "15min",
+       outputsize = "full")
+
+TSLA <- TSLA %>% 
+  select(timestamp,close)
+```
+
+
+
+## Arturo-saturday night. DATA WRANGLING: Figure out all technical codes for TO-DO “APPL Tim Cook Analysis: How to get matching comments/ retweet (contents) without overlaps + left join + make it a single data set and explain it + make sure you select only necessary columns and have reasons behind why you chose them.
+
+```{r}
+library(rtweet)
+library(twitteR)
+library(purrr)
+library(dplyr)
+library(readr)
+library(data.table)
+library(writexl)
+
+
+#  - - - - - - - - - - - - - - - - Setting up our Twitter API - - - - - - - - - - - - - - - - - - - - - - - - - - 
+
+api_key <- '37osUadblZABTOkc2mqlhERZu'
+
+api_secret_key <- 'k2HdTUg5GERupy8iUyOdrd8Z2J67S4qUeNaZhbgvCSd0p3JmY6'
+
+access_token <- '1453471187653201923-i7wAcAEJSI1youyTHsObUPNuDZENXH'
+
+access_secret_token <- 'Da6L4g5a4IlqEQRpMlLla2ZgvgZLDXd19SaCLULWzauCR'
+
+appname <- "comp_stats_proj"
+key <- '37osUadblZABTOkc2mqlhERZu'
+secret <- 'k2HdTUg5GERupy8iUyOdrd8Z2J67S4qUeNaZhbgvCSd0p3JmY6'
+
+twitter_token <- create_token(
+  app = appname,
+  consumer_key = key,
+  consumer_secret = secret,
+  access_token = access_token,
+  access_secret = access_secret_token
+)
+
+#  - - - - - - - - - - - - - - - Getting Tweets from a specific person - - - - - - - - - - - - - - - - - - - - 
+
+
+# STEP 1: Get tweets from a specific user 
+
+# get_timelines takes takes twitter username as the first input and number of tweets we want as a second input. Our output is a dataframe containing important information such as the user's ID, the date and time of the tweet, and the tweet itself 
+
+tim_cook <- get_timelines("tim_cook", n = 100) 
+
+write_csv(tim_cook, './pleaseeeeee')
+
+
+# STEP 2: Get retweets from a specific tweet
+
+# get_retreets takes in the ID of a tweet and the number of retweets we want to get (100 is the limit). The output is a dataframe containing information on the retweets. 
+
+retweets <- get_retweets("1459237768207298566", n = 100, parse = TRUE, token = NULL)
+
+# the function below iterates trough a column of tweet IDs and obtains information about all the retweets for each particular tweet ID. The output is a list of nrow number of dataframes. 
+
+create_retweets_df <- function(df) { 
+  vec <- c()
+  for(i in df$status_id) {
+    output <- purrr::map(i, get_retweets)
+    vec <- append(vec, output)
+  }
+  return(vec)}
+   
+final_retweets <- create_retweets_df(tim_cook)
+
+
+
+
+# Step 3: Get information on comments for each tweet
+
+
+
+```

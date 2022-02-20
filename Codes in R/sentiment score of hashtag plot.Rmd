@@ -1,0 +1,409 @@
+<<<<<<< HEAD
+---
+title: "stock+sentiment from past week"
+output: pdf_document
+---
+
+```{r setup, include=FALSE, echo=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+We aim to analyze Twitter sentiments toward companies. Since the shareholders normally post their opinions under the hashtag of the target company's ticker symbol (for example, #AAPL for Apple, #TSLA for Tesla), we collected the hashtaged tweets and assigned a sentiment polarity score to each text. Due to the restrictions of Twitter's API (and unfortunately, the GetoldTweets3 library is no longer working since Twitter's update last year), we are only able to retrieve tweets from the past 10 days by using the $\textbf{rtweet}$ package (https://github.com/ropensci/rtweet).
+
+The sentiment polarity score is computed with the $\textbf{sentimentr}$ package (https://github.com/trinker/sentimentr). We first cleaned the text by removing attached pictures and links. $\textbf{sentimentr}$ is an augmented dictionary lookup algorithm that takes each word in the text, searches through multiple dictionaries of words with pre-labeled sentiment scores, takes valence shifters (i.e., negators, intensifiers, de-amplifiers, and adversative conjunctions) into account, and returns a score in the range $[-1,1]$ with $1$ indicating the most positive sentiment, $-1$ the most negative, and $0$ as purely neutral. It can also convert emojis and slangs to comprehensive descriptions.
+
+Then, we retrieved stock data through Alpha Vantage and the package $\textbf{alphavantager}$ (https://cran.r-project.org/web/packages/alphavantager/). We want to juxtapose the shifts in stock price and Twitter sentiment to see if the sentiment of shareholders online reflect/impact companies' stock price.
+
+##Codes
+
+Libraries and API setup:
+```{r}
+library(rtweet)
+library(ggplot2)
+library(dplyr)
+library(tidytext)
+library(lubridate)
+library(sentimentr)
+library(stringr)
+library(alphavantager)
+
+api_key <- '37osUadblZABTOkc2mqlhERZu'
+api_secret_key <- 'k2HdTUg5GERupy8iUyOdrd8Z2J67S4qUeNaZhbgvCSd0p3JmY6'
+access_token <- '1453471187653201923-i7wAcAEJSI1youyTHsObUPNuDZENXH'
+access_secret_token <- 'Da6L4g5a4IlqEQRpMlLla2ZgvgZLDXd19SaCLULWzauCR'
+appname <- "comp_stats_proj"
+key <- '37osUadblZABTOkc2mqlhERZu'
+secret <- 'k2HdTUg5GERupy8iUyOdrd8Z2J67S4qUeNaZhbgvCSd0p3JmY6'
+
+twitter_token <- create_token(
+  app = appname,
+  consumer_key = key,
+  consumer_secret = secret,
+  access_token = access_token,
+  access_secret = access_secret_token
+)
+
+av_api_key("YOUR_API_KEY")
+print(av_api_key())
+
+```
+
+A function for text cleaning:
+```{r}
+# pre-processing text:
+clean.text = function(x)
+{
+  # remove urls
+  x = qdapRegex::rm_twitter_url(x)
+  # remove tabs
+  x = gsub("[ |\t]{2,}", "", x)
+  # remove blank spaces at the beginning
+  x = gsub("^ ", "", x)
+  # remove blank spaces at the end
+  x = gsub(" $", "", x)
+  # some other cleaning text
+  x = gsub("([,])|[[:punct:]]", " ", x)
+  x = gsub('[^[:graph:]]', ' ',x)
+  #emojis and internet expressions to words
+  x = replace_emoji(x)
+  x = replace_word_elongation(x)
+  x = replace_internet_slang(x)
+  x = replace_emoticon(x)
+}
+
+```
+
+
+Now we retrieve the most recent tweets under the hashtag #AAPL. We set the number of retrieving calls to a large number that exceeds the tweet volume under the same hashtag for the past ten days.
+
+```{r}
+AAPL_tweet <- search_tweets("#AAPL",  n = 5000, type = "recent",
+  include_rts = TRUE, lang = "en") %>% arrange(created_at)
+```
+
+The timestamps of each tweet is marked in UTC and specified to seconds. In order to juxtapose tweet sentiment with stock prices, we round up tweet timestamps to the nearest 5 minute and convert them to EST, the timezone corresponding to the stock market. Afterwards, we calculate the sentiment polarity score of each tweet.
+
+```{r}
+AAPL_sentiment <- AAPL_tweet %>% 
+  mutate(est = round_time(created_at, "5 min",tz = "America/New_York"))%>%
+  select(est, created_at, text)%>%
+  mutate(clean = clean.text(text)) %>% 
+  mutate(pol = sentiment(clean)) %>%
+  tidyr::unnest(cols = c(pol))%>%
+  select(-element_id,-sentence_id, -word_count)%>%
+  arrange(est)
+```
+
+Since there could be multiple tweets sent within the same 5-min slot, we calculate the average of the sentiment polarity score for every 5 minute. Since Alpha Vantage can get stock value data for a longer time period (a month), we save the earliest time when tweets could be retrieved to be the start point of our future plots. 
+
+```{r}
+AAPL_pol <- AAPL_sentiment %>%
+  group_by(est) %>% summarise(polarity = mean(sentiment))
+
+AAPL_start <- AAPL_pol[1,1] %>% pull()
+print(AAPL_start)
+```
+
+Use Alpha Vantage and the package $\textbf{alphavantager}("https://cran.r-project.org/web/packages/alphavantager/") to get intraday stock value every 5 minutes. The data include the stock's openning price, closing price, and transaction volume within each 5 minute interval. To make each 5-min-interval corresponds with one stock value, we calculate the average of opening and closing prices.
+
+```{r}
+AAPL <- 
+  av_get(symbol     = "AAPL",
+       av_fun     = "TIME_SERIES_INTRADAY",
+       interval   = "5min",
+       outputsize = "full") %>% 
+  select(timestamp, open, close, volume) %>%
+  mutate(avg = (open+close)/2) %>% 
+  mutate(hour = hour(timestamp)) %>%
+  mutate(day = wday(timestamp)) #Sun=1, Mon=2, Tue=3, Wed=4, Thu=5, Fri=6, Sat=7
+```
+               
+(Some wrangling details) A problem we discovered in this data frame is that, due to the 5-min interval, daily data ends at 20:00 and begins at 4:05, so when plotting the stock price, the line between these two points won't be horizontal. The code below manually adds rows for 4:00, for which the stock values remain the same as they were at 20:00 the previous day (e.g. Monday 4:00 should duplicate the values from Friday 20:00; Tuesday 4:00 should duplicate the values from Monday 20:00).
+
+
+```{r}
+#First create a separate dataframe for the stock prices at 20:00, and then change timestamp to corresponding next-day 4:00 values. Finally, rbind this dataframe back to the original table.
+
+AAPL_20 <- AAPL %>% 
+        filter(hour == 20) %>% 
+        mutate(hour = 4) %>% 
+        mutate(add_hours = if_else(day == 6, 56, 8)) %>% #if it's Friday 20:00, then add 56 hours to change it to Monday 4:00; if it's weekday 20:00, then add 8 hours to change it to next day 4:00
+        mutate(timestamp = timestamp + hours(add_hours)) %>%
+        mutate(day = wday(timestamp)) %>%
+        select(-add_hours)
+
+#Finalize the dataframe for visualization. Since sentiment polarity scores are ranged from -1 to 1, we need to put the stock price and volume to [-1,1] scale as well.
+AAPL_final <- rbind(AAPL,AAPL_20) %>% 
+        arrange(timestamp) %>% #arrange to inserted the rbind rows in chronological order.
+        filter(timestamp > AAPL_start)%>%
+        mutate(stock_price= 2*(avg - min(avg))/(max(avg)-min(avg)) - 1) %>%
+        mutate(stock_volume = 2*(volume - min(volume))/(max(volume)-min(volume)) - 1) 
+
+```
+
+The tweet dataframe and stock dataframe has the same timestamp column, so we fulljoin the two dataframes and plot the curves for stock changes and sentiment score changes. 
+
+```{r}
+
+plot_AAPL <- AAPL_final %>% 
+  full_join(AAPL_pol, by = c( "timestamp" = "est" ))
+
+colors <- c("stock_price" = "blue", "polarity" = "red", "stock_volume" = "orange")
+
+ggplot()  + 
+  geom_line(data = plot_AAPL[!is.na(plot_AAPL$stock_price),], aes(x = timestamp,y = stock_price, color = 'stock_price')) +
+  geom_line(data = plot_AAPL[!is.na(plot_AAPL$polarity),], aes(x = timestamp,y = polarity, color = 'polarity')) +
+  geom_line(data = plot_AAPL[!is.na(plot_AAPL$stock_volume),], aes(x = timestamp,y = stock_volume, color = 'stock_volume'))+
+  labs(x = "APPLE",
+         y = "normalize values",
+         color = "") +
+  scale_color_manual(values = colors)+
+  theme(legend.position = "bottom")
+
+```
+
+
+Now, repeat the procedure for other companies.
+
+Microsoft:
+```{r, include = FALSE}
+MSFT_tweet <- search_tweets("#MSFT",  n = 5000, type = "recent",
+  include_rts = TRUE, lang = "en") %>% arrange(created_at)
+
+MSFT_sentiment <- MSFT_tweet %>% 
+  mutate(est = round_time(created_at, "5 min",tz = "America/New_York"))%>%
+  select(est, created_at, text)%>%
+  mutate(clean = clean.text(text)) %>% 
+  mutate(pol = sentiment(clean)) %>%
+  tidyr::unnest(cols = c(pol))%>%
+  select(-element_id,-sentence_id, -word_count)%>%
+  arrange(est)
+
+MSFT_pol <- MSFT_sentiment %>%
+  group_by(est) %>% summarise(polarity = mean(sentiment))
+
+MSFT_start <- MSFT_pol[1,1] %>% pull()
+
+MSFT <- 
+  av_get(symbol     = "MSFT",
+       av_fun     = "TIME_SERIES_INTRADAY",
+       interval   = "5min",
+       outputsize = "full") %>% 
+  select(timestamp, open, close, volume) %>%
+  mutate(avg = (open+close)/2) %>% 
+  mutate(hour = hour(timestamp)) %>%
+  mutate(day = wday(timestamp))
+
+MSFT_20 <- MSFT %>% 
+        filter(hour == 20) %>% 
+        mutate(hour = 4) %>% 
+        mutate(add_hours = if_else(day == 6, 56, 8)) %>% 
+        mutate(timestamp = timestamp + hours(add_hours)) %>%
+        mutate(day = wday(timestamp)) %>%
+        select(-add_hours)
+
+MSFT_final <- rbind(MSFT,MSFT_20) %>% 
+        arrange(timestamp) %>% 
+        filter(timestamp > MSFT_start)%>%
+        mutate(stock_price= 2*(avg - min(avg))/(max(avg)-min(avg)) - 1) %>%
+        mutate(stock_volume = 2*(volume - min(volume))/(max(volume)-min(volume)) - 1) 
+
+plot_MSFT <- MSFT_final %>% 
+  full_join(MSFT_pol, by = c( "timestamp" = "est" ))
+
+colors <- c("stock_price" = "blue", "polarity" = "red", "stock_volume" = "orange")
+
+ggplot()  + 
+  geom_line(data = plot_MSFT[!is.na(plot_MSFT$stock_price),], aes(x = timestamp,y = stock_price, color = 'stock_price')) +
+  geom_line(data = plot_MSFT[!is.na(plot_MSFT$polarity),], aes(x = timestamp,y = polarity, color = 'polarity')) +
+  geom_line(data = plot_MSFT[!is.na(plot_MSFT$stock_volume),], aes(x = timestamp,y = stock_volume, color = 'stock_volume'))+
+  labs(x = "Microsoft",
+         y = "normalize values",
+         color = "") +
+  scale_color_manual(values = colors)+
+  theme(legend.position = "bottom")
+
+```
+TESLA
+```{r, include = FALSE}
+TSLA_tweet <- search_tweets("#TSLA",  n = 5000, type = "recent",
+  include_rts = TRUE, lang = "en") %>% arrange(created_at)
+
+TSLA_sentiment <- TSLA_tweet %>% 
+  mutate(est = round_time(created_at, "5 min",tz = "America/New_York"))%>%
+  select(est, created_at, text)%>%
+  mutate(clean = clean.text(text)) %>% 
+  mutate(pol = sentiment(clean)) %>%
+  tidyr::unnest(cols = c(pol))%>%
+  select(-element_id,-sentence_id, -word_count)%>%
+  arrange(est)
+
+TSLA_pol <- TSLA_sentiment %>%
+  group_by(est) %>% summarise(polarity = mean(sentiment))
+
+TSLA_start <- TSLA_pol[1,1] %>% pull()
+
+TSLA <- 
+  av_get(symbol     = "TSLA",
+       av_fun     = "TIME_SERIES_INTRADAY",
+       interval   = "5min",
+       outputsize = "full") %>% 
+  select(timestamp, open, close, volume) %>%
+  mutate(avg = (open+close)/2) %>% 
+  mutate(hour = hour(timestamp)) %>%
+  mutate(day = wday(timestamp))
+
+TSLA_20 <- TSLA %>% 
+        filter(hour == 20) %>% 
+        mutate(hour = 4) %>% 
+        mutate(add_hours = if_else(day == 6, 56, 8)) %>% 
+        mutate(timestamp = timestamp + hours(add_hours)) %>%
+        mutate(day = wday(timestamp)) %>%
+        select(-add_hours)
+
+TSLA_final <- rbind(TSLA,TSLA_20) %>% 
+        arrange(timestamp) %>% 
+        filter(timestamp > TSLA_start)%>%
+        mutate(stock_price= 2*(avg - min(avg))/(max(avg)-min(avg)) - 1) %>%
+        mutate(stock_volume = 2*(volume - min(volume))/(max(volume)-min(volume)) - 1) 
+
+plot_TSLA <- TSLA_final %>% 
+  full_join(TSLA_pol, by = c( "timestamp" = "est" ))
+
+colors <- c("stock_price" = "blue", "polarity" = "red", "stock_volume" = "orange")
+
+ggplot()  + 
+  geom_line(data = plot_TSLA[!is.na(plot_TSLA$stock_price),], aes(x = timestamp,y = stock_price, color = 'stock_price')) +
+  geom_line(data = plot_TSLA[!is.na(plot_TSLA$polarity),], aes(x = timestamp,y = polarity, color = 'polarity')) +
+  geom_line(data = plot_TSLA[!is.na(plot_TSLA$stock_volume),], aes(x = timestamp,y = stock_volume, color = 'stock_volume'))+
+  labs(x = "Tesla",
+         y = "normalize values",
+         color = "") +
+  scale_color_manual(values = colors)+
+  theme(legend.position = "bottom")
+```
+Twitter:
+```{r, include = FALSE}
+TWTR_tweet <- search_tweets("#TWTR",  n = 5000, type = "recent",
+  include_rts = TRUE, lang = "en") %>% arrange(created_at)
+
+TWTR_sentiment <- TWTR_tweet %>% 
+  mutate(est = round_time(created_at, "5 min",tz = "America/New_York"))%>%
+  select(est, created_at, text)%>%
+  mutate(clean = clean.text(text)) %>% 
+  mutate(pol = sentiment(clean)) %>%
+  tidyr::unnest(cols = c(pol))%>%
+  select(-element_id,-sentence_id, -word_count)%>%
+  arrange(est)
+
+TWTR_pol <- TWTR_sentiment %>%
+  group_by(est) %>% summarise(polarity = mean(sentiment))
+
+TWTR_start <- TWTR_pol[1,1] %>% pull()
+
+TWTR <- 
+  av_get(symbol     = "TWTR",
+       av_fun     = "TIME_SERIES_INTRADAY",
+       interval   = "5min",
+       outputsize = "full") %>% 
+  select(timestamp, open, close, volume) %>%
+  mutate(avg = (open+close)/2) %>% 
+  mutate(hour = hour(timestamp)) %>%
+  mutate(day = wday(timestamp))
+
+TWTR_20 <- TWTR %>% 
+        filter(hour == 20) %>% 
+        mutate(hour = 4) %>% 
+        mutate(add_hours = if_else(day == 6, 56, 8)) %>% 
+        mutate(timestamp = timestamp + hours(add_hours)) %>%
+        mutate(day = wday(timestamp)) %>%
+        select(-add_hours)
+
+TWTR_final <- rbind(TWTR,TWTR_20) %>% 
+        arrange(timestamp) %>% 
+        filter(timestamp > TWTR_start)%>%
+        mutate(stock_price= 2*(avg - min(avg))/(max(avg)-min(avg)) - 1) %>%
+        mutate(stock_volume = 2*(volume - min(volume))/(max(volume)-min(volume)) - 1) 
+
+plot_TWTR <- TWTR_final %>% 
+  full_join(TWTR_pol, by = c( "timestamp" = "est" ))
+
+colors <- c("stock_price" = "blue", "polarity" = "red", "stock_volume" = "orange")
+
+ggplot()  + 
+  geom_line(data = plot_TWTR[!is.na(plot_TWTR$stock_price),], aes(x = timestamp,y = stock_price, color = 'stock_price')) +
+  geom_line(data = plot_TWTR[!is.na(plot_TWTR$polarity),], aes(x = timestamp,y = polarity, color = 'polarity')) +
+  geom_line(data = plot_TWTR[!is.na(plot_TWTR$stock_volume),], aes(x = timestamp,y = stock_volume, color = 'stock_volume'))+
+  labs(x = "Twitter",
+         y = "normalize values",
+         color = "") +
+  scale_color_manual(values = colors)+
+  theme(legend.position = "bottom")
+```
+
+
+AMC:
+```{r, include = FALSE}
+AMZN_tweet <- search_tweets("#AMZN",  n = 5000, type = "recent",
+  include_rts = TRUE, lang = "en") %>% arrange(created_at)
+
+AMZN_sentiment <- AMZN_tweet %>% 
+  mutate(est = round_time(created_at, "5 min",tz = "America/New_York"))%>%
+  select(est, created_at, text)%>%
+  mutate(clean = clean.text(text)) %>% 
+  mutate(pol = sentiment(clean)) %>%
+  tidyr::unnest(cols = c(pol))%>%
+  select(-element_id,-sentence_id, -word_count)%>%
+  arrange(est)
+
+AMZN_pol <- AMZN_sentiment %>%
+  group_by(est) %>% summarise(polarity = mean(sentiment))
+
+AMZN_start <- AMZN_pol[1,1] %>% pull()
+
+AMZN <- 
+  av_get(symbol     = "AMZN",
+       av_fun     = "TIME_SERIES_INTRADAY",
+       interval   = "5min",
+       outputsize = "full") %>% 
+  select(timestamp, open, close, volume) %>%
+  mutate(avg = (open+close)/2) %>% 
+  mutate(hour = hour(timestamp)) %>%
+  mutate(day = wday(timestamp))
+
+AMZN_20 <- AMZN %>% 
+        filter(hour == 20) %>% 
+        mutate(hour = 4) %>% 
+        mutate(add_hours = if_else(day == 6, 56, 8)) %>% 
+        mutate(timestamp = timestamp + hours(add_hours)) %>%
+        mutate(day = wday(timestamp)) %>%
+        select(-add_hours)
+
+AMZN_final <- rbind(AMZN,AMZN_20) %>% 
+        arrange(timestamp) %>% 
+        filter(timestamp > AMZN_start)%>%
+        mutate(stock_price= 2*(avg - min(avg))/(max(avg)-min(avg)) - 1) %>%
+        mutate(stock_volume = 2*(volume - min(volume))/(max(volume)-min(volume)) - 1) 
+
+plot_AMZN <- AMZN_final %>% 
+  full_join(AMZN_pol, by = c( "timestamp" = "est" ))
+
+colors <- c("stock_price" = "blue", "polarity" = "red", "stock_volume" = "orange")
+
+ggplot()  + 
+  geom_line(data = plot_AMZN[!is.na(plot_AMZN$stock_price),], aes(x = timestamp,y = stock_price, color = 'stock_price')) +
+  geom_line(data = plot_AMZN[!is.na(plot_AMZN$polarity),], aes(x = timestamp,y = polarity, color = 'polarity')) +
+  geom_line(data = plot_AMZN[!is.na(plot_AMZN$stock_volume),], aes(x = timestamp,y = stock_volume, color = 'stock_volume'))+
+  labs(x = "Amazon",
+         y = "normalize values",
+         color = "") +
+  scale_color_manual(values = colors)+
+  theme(legend.position = "bottom")
+```
+
+
+```{r}
+
+write.csv(plot_AAPL, file = "D:/Pomona Semester files/Comp Stats//plot_AAPL.csv", row.names = FALSE)
+
+```

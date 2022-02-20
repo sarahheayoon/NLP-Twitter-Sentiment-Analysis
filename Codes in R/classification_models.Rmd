@@ -1,0 +1,403 @@
+---
+title: "classification_models"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+The dataset being used comes from kaggle: https://www.kaggle.com/nadun94/twitter-sentiments-aapl-stock. 
+The dataset has data on AAPL stock from 2016 to 2019 on a daily basis. It has the date, the price when the stock market opened, the lowest and highest value of the stock recorded that day, the price when the stock market closed, the volume of stocks traded, and twitter sentiment, and twitter volume. Predicting stock prices seems to far fetched, so instead we're going to test whether we can predict of the stock price will go up or down. We run classification models, so our outcome variable is the trend of the stock market, rising or falling. We determine the stock price trend by observing whether the stock price when the stock market closes is smaller or bigger than the price from the previous day. 
+
+```{r}
+library(rpart.plot)
+library(tidymodels)
+library(dplyr)
+library(tidyverse)
+library(fastDummies)
+library(vip)
+library(kernlab)
+df <- read.csv(file = 'AAPL.csv')
+
+df$ts_polarity = as.numeric(as.character(df$ts_polarity))
+
+df <- df %>% add_column('Stock_difference' = 0)
+
+for (i in 2:nrow(df)) { 
+  df$Stock_difference[i] <- df[i, 6] - df[i-1, 6]
+}
+
+# WHAT TO DO IF NO CHANGE BC OF WEEKEND? 
+df <- df %>% 
+  mutate(trend = case_when(Stock_difference > 0 ~ "rise", Stock_difference <= 0 ~ "fall"))
+```
+
+
+```{r echo=FALSE}
+
+# Change line color and fill color
+ggplot(df, aes(x=ts_polarity))+
+  geom_histogram(color="darkblue", fill="lightblue")
+
+```
+
+#  - - - - - - - - - - - - - - - - - - CLASSIFICATION MODELS - - - - - - - - - - - - - - - - - -
+
+We intend on running several classification models: CART, Random Forest, and SVM 
+
+## CLASSIFICATION CART 
+
+We first split the data a training set and test set.
+
+```{r}
+set.seed(47)
+
+df_split <- initial_split(df, prop = 3/4)
+df_train <- training(df_split)
+df_test <- testing(df_split)
+```
+
+Next, we build our recipe, model, workflow, and fit it to the training data. 
+```{r}
+
+# recipe 
+cart_recipe <- recipe(trend ~ ts_polarity + twitter_volume + Volume, data = df_train) 
+
+# model 
+cart_model <- decision_tree() %>%
+  set_engine("rpart") %>%
+  set_mode("classification")
+
+# workflow 
+cart_wflow <- workflow() %>%
+  add_model(cart_model) %>%
+  add_recipe(cart_recipe)
+
+# fit
+cart_fit <- cart_wflow %>%
+  fit(data = df_train)
+
+```
+
+Below is the image of the tree. The first split is on the volume of stocks traded, meaning that volume is the most important determinant of stock price trends, given the data that we have. This is an unpruned tree and tuning our model could help us improve our accuracy. 
+
+```{r}
+cart_plot <- 
+  cart_fit %>%
+  extract_fit_parsnip()
+rpart.plot(
+  cart_plot$fit,
+  roundint = FALSE)
+
+```
+
+# CART TUNUNG 
+
+Given the size of our training data, we choose to do a 5-fold cross validation to tune our model. 
+```{r}
+
+set.seed(47)
+
+# create folds
+cart_vfold <- vfold_cv(df_train, v = 5, strata = trend)
+
+# vector of tree depths
+cart_grid <- expand.grid(tree_depth = seq(1, 5, by = 1))
+
+# workflow
+cart_tune <- decision_tree(tree_depth = tune()) %>%
+  set_engine("rpart") %>%
+  set_mode("classification")
+
+cart_wflow_tune <- workflow() %>%
+  add_model(cart_tune) %>%
+  add_recipe(cart_recipe)
+
+# tuning
+cart_tuned <- cart_wflow_tune %>%
+  tune_grid(resamples = cart_vfold, 
+           grid = cart_grid) 
+
+# best value of tree depth
+cart_tuned %>% collect_metrics() %>%
+  filter(.metric == "accuracy")
+
+cart_tuned %>%
+autoplot(metric = "accuracy")
+
+cart_tuned %>%
+  collect_metrics() %>%
+  filter(.metric == "accuracy") %>% arrange(desc(mean))
+```
+After running the code above, we see that the tree depth 5 yields the best result. According to the cross validation, when our model uses the best parameters, we predict with 56.2% accuracy.
+
+```{r}
+
+# pruned model
+cart_final <- decision_tree(tree_depth = 5) %>%
+set_engine("rpart") %>%
+set_mode("classification")
+
+# pruned model workflow
+cart_final_wflow <- workflow() %>%
+add_model(cart_final) %>%
+add_recipe(cart_recipe)
+
+# pruned fit
+cart_final_fit <- cart_final_wflow %>%
+fit(data = df_train)
+
+```
+```{r}
+final_cart_plot <- 
+  cart_final_fit %>%
+  extract_fit_parsnip()
+rpart.plot(
+  final_cart_plot$fit,
+  roundint = FALSE)
+
+```
+
+
+
+## RANDOM FOREST MODEL 
+
+Now we turn to a random forests. From what we learned in class, trees suffer from high variance, so, to reduce variability, we  implement a random forset.
+
+First we create a recipe and mode for our random forest. 
+```{r}
+set.seed(47)
+
+
+# recipe
+rf_recipe <- recipe(trend ~ ts_polarity + twitter_volume + Volume, data = df_train) 
+
+# model 
+rf_model <- rand_forest() %>%
+  set_engine("ranger", importance = "permutation") %>%
+  set_mode("classification")
+
+```
+
+Now we tune the parameters to establish the best fit of our model. Again, we conduct a 5-fold cross validation and test the ideal number of trees between 1 and 401. According to the plot, the best random forest model when fitted to the training data would use and mtry of 3	and 251 trees. 
+
+```{r}
+
+set.seed(47)
+
+# CV
+rf_folds <- vfold_cv(df_train,  v = 5)
+
+# vector of tree depths and mtry
+rf_grid <- expand.grid(mtry=seq(1,3), trees = seq(1,401, by =50)) 
+
+# workflow
+rf_tune <- 
+  rand_forest(trees = tune(), mtry = tune()) %>% 
+  set_engine("ranger", importance = "permutation") %>%
+  set_mode("classification")
+
+rf_wflow_tune <- workflow() %>%
+  add_model(rf_tune) %>%
+  add_recipe(rf_recipe)
+
+# tuning 
+rf_tuned <- rf_wflow_tune %>%
+tune_grid(resamples = rf_folds, grid = rf_grid)
+
+# best accuracy
+rf_tuned %>% 
+  select_best("accuracy")
+
+# plot
+rf_tuned %>%
+  autoplot()
+
+rf_tuned %>%
+  collect_metrics() %>%
+  filter(.metric == "accuracy") %>% arrange(desc(mean))
+```
+
+According to the cross validation, when our model uses the best parameters, we have predict with 57% accuracy.
+Volume is the most important variable followed by twitter volume.  
+
+```{r}
+set.seed(47)
+
+# Final Random Forest Model 
+
+rf_best <- rand_forest(mtry = 3, trees = 251) %>%
+  set_engine("ranger", importance = "permutation") %>%
+  set_mode("classification")
+  
+final_rf_model <-
+  workflow() %>%
+  add_model(rf_best) %>%
+  add_recipe(rf_recipe) %>%
+  fit(data = df_train)
+
+# vip 
+final_rf_model %>% extract_fit_parsnip() %>% 
+  vip(geom = "point")
+
+```
+
+
+
+## SVM 
+
+Lastly, we want to test if an SVM model would better predict stock price trends given twitter sentiment. 
+
+First we implement a linear SVM which we tune using 4-fold cross validation and tuning the cost to get the best model given our training data. 
+
+```{r}
+set.seed(47)
+
+# recipe
+svm_recipe <- recipe(trend ~ ts_polarity + twitter_volume + Volume, data = df_train) %>% step_normalize(all_predictors())
+
+# workflow
+svm_lin <-
+svm_linear(cost = tune()) %>%
+set_engine("kernlab") %>%
+set_mode("classification")
+
+svm_lin_wflow <- workflow() %>%
+add_model(svm_lin) %>%
+add_recipe(svm_recipe)
+
+# vfolds 
+folds <- vfold_cv(df_train, v=4)
+cost_grid <- grid_regular(cost(), levels = 8)
+
+# tune 
+svm_lin_tune <- svm_lin_wflow %>% tune_grid(resamples=folds, grid=cost_grid)
+
+svm_lin_tune %>%
+  collect_metrics() %>%
+  filter(.metric == "accuracy") %>% arrange(desc(mean))
+
+```
+
+According to the cross validation, when our model uses the best parameters, we predict with 54%	accuracy.
+
+
+```{r}
+# best model
+svm_lin_best <- finalize_model(svm_lin, select_best(svm_lin_tune, "accuracy"))
+
+# fit
+svm_lin_tuned_fit <-
+  workflow() %>%
+  add_model(svm_lin_best) %>%
+  add_recipe(svm_recipe) %>%
+  fit(data = df_train)
+
+```
+
+We will test a polynomial SVM next which we also tune.
+
+## POLYNOMIAL SVM 
+
+```{r}
+set.seed(47)
+
+svm_poly <- svm_poly(
+cost = tune(),
+degree = tune()) %>%
+set_engine("kernlab") %>%
+set_mode("classification")
+
+# workflow
+svm_poly_wflow <- workflow() %>%
+add_model(svm_poly) %>%
+add_recipe(svm_recipe)
+
+# parameters
+grid_poly <- grid_regular(cost(), 
+                               degree(c(1,5)), levels = 5)
+# tune
+svm_poly_tune <-
+svm_poly_wflow %>%
+tune_grid(resamples = folds,
+grid = grid_poly)
+svm_poly_tune %>%
+collect_metrics() %>%
+filter(.metric == "accuracy") %>%
+arrange(desc(mean))
+
+svm_poly_tune %>%
+  collect_metrics() %>%
+  filter(.metric == "accuracy") %>% arrange(desc(mean))
+
+```
+
+According to the cross validation, when our model uses the best parameters, we predict with 55%	accuracy.
+
+```{r}
+
+# best model
+svm_poly_best <- finalize_model(
+  svm_poly,
+  select_best(svm_poly_tune, "accuracy"))
+svm_poly_best
+
+# fit
+svm_poly_tuned_fit <-
+  workflow() %>%
+  add_model(svm_poly_best) %>%
+  add_recipe(svm_recipe) %>%
+  fit(data = df_train)
+
+```
+
+
+# RBF SVM 
+
+Lastly, we implement a RBF model which we also tune.
+
+```{r}
+
+set.seed(47)
+
+svm_rbf <- svm_rbf(
+cost = tune(), rbf_sigma=tune()) %>%
+set_engine("kernlab") %>%
+set_mode("classification")
+
+# workflow
+svm_rbf_wflow <- workflow() %>%
+add_model(svm_rbf) %>%
+add_recipe(svm_recipe)
+
+# parameters
+grid_rbf <- grid_regular(cost(), rbf_sigma(), levels=5)
+                           
+# tune
+svm_rbf_tune <- svm_rbf_wflow %>% tune_grid(resamples = folds, grid = grid_rbf)
+
+svm_rbf_tune %>%
+collect_metrics() %>%
+filter(.metric == "accuracy") %>%
+arrange(desc(mean))
+
+svm_rbf_best <- finalize_model(svm_rbf, select_best(svm_rbf_tune, "accuracy"))
+svm_rbf_best
+
+# fit
+svm_rbf_tuned_fit <-
+  workflow() %>%
+  add_model(svm_rbf_best) %>%
+  add_recipe(svm_recipe) %>%
+  fit(data = df_train)
+
+
+
+
+```
+
+According to the cross validation, when our model uses the best parameters, we predict with 56%	accuracy.
+
+
+All of our models did not accurately predict the data. Overall, it seems like using Twitter sentiment to predict stock price trends is futile. 
