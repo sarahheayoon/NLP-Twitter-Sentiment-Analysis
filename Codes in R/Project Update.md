@@ -1,7 +1,4 @@
-Project Update (due 11.19)
-
-
-Please respond to the following three questions:
+Project Update:
 
 1. Have you already collected, or do you have access to, all of the data that you will need in order to complete your project? If not, please estimate the percentage of the data that you have, describe any issues that you are having, and what your plan is for getting the rest of the data. 
 
