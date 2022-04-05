@@ -2,9 +2,7 @@
 # Using Machine Learning Methods to Assess the Imapact of Twitter Sentiment on a Company's Stock Prices
 
 ## Group Members: 
- Sarah: Project Manager
- Arturo: Facilitator
- Pipi: Task Manager
+ Sarah (Project Manager) Arturo (Facilitator) Pipi (Task Manager)
  
 # Abstract
 Our project goal is to understand to what extent Twitter can reflect a company’s value. We wanted to examine the value of a company from two approaches. One way was to examine how the influential figures of each company, such as the CEOs, utilize Twitter space to promote values of a company. Our finding was that not all CEO use Twitter space to promote their brand values. Second approach was to look at the stock value of a company. We were curious to see to what extent the public sentiment of a company is reflected on Twitter, and how these sentiments may or may not influence the companies' stock prices. We concluded that Twitter sentiments alone cannot capture or influence the rise or the fall of company stock prices. However, we were able to conclude that the Twitter volume is a significant predictor of stock price rise or fall.
